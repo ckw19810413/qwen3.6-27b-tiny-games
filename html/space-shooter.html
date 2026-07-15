@@ -714,7 +714,10 @@ function update(dt) {
   }
 
   // --- Update enemies ---
-  for (let i = enemies.length - 1; i >= 0; i--) {
+  const enemiesToRemove = new Set();
+  const playerBulletsToRemove = new Set();
+
+  for (let i = 0; i < enemies.length; i++) {
     const e = enemies[i];
     e.patternTime += dt * e.patternFreq;
 
@@ -746,7 +749,7 @@ function update(dt) {
 
     // Off screen bottom
     if (e.y > GAME_H + 50) {
-      enemies.splice(i, 1);
+      enemiesToRemove.add(i);
       if (!player.invincible) {
         lives--;
         player.invincible = true;
@@ -757,11 +760,15 @@ function update(dt) {
       continue;
     }
 
+    // Skip if already marked for removal
+    if (enemiesToRemove.has(i)) continue;
+
     // Bullet-enemy collision
-    for (let j = playerBullets.length - 1; j >= 0; j--) {
+    for (let j = 0; j < playerBullets.length; j++) {
+      if (playerBulletsToRemove.has(j)) continue;
       const b = playerBullets[j];
       if (circleRectCollision(b.x, b.y, 4, e.x - e.w/2, e.y - e.h/2, e.w, e.h)) {
-        playerBullets.splice(j, 1);
+        playerBulletsToRemove.add(j);
         e.hp--;
         if (e.hp <= 0) {
           // Destroyed
@@ -774,25 +781,25 @@ function update(dt) {
             spawnPowerup(e.x, e.y);
           }
 
-          enemies.splice(i, 1);
+          enemiesToRemove.add(i);
         }
         break;
       }
     }
 
     // Player-enemy collision
-    if (i < enemies.length && rectCollision(
+    if (!enemiesToRemove.has(i) && rectCollision(
       { x: player.x, y: player.y, w: player.w * 0.6, h: player.h * 0.6 },
       { x: e.x, y: e.y, w: e.w, h: e.h }
     )) {
       if (player.shielded) {
         createExplosion(e.x, e.y, e.color);
         score += e.score;
-        enemies.splice(i, 1);
+        enemiesToRemove.add(i);
         playSound('explosion');
       } else if (!player.invincible) {
         createExplosion(e.x, e.y, e.color);
-        enemies.splice(i, 1);
+        enemiesToRemove.add(i);
         lives--;
         player.invincible = true;
         player.invincibleTimer = 2;
@@ -800,6 +807,14 @@ function update(dt) {
         if (lives <= 0) gameOver();
       }
     }
+  }
+
+  // Remove marked enemies and bullets (backward splice to keep indices valid)
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    if (enemiesToRemove.has(i)) enemies.splice(i, 1);
+  }
+  for (let j = playerBullets.length - 1; j >= 0; j--) {
+    if (playerBulletsToRemove.has(j)) playerBullets.splice(j, 1);
   }
 
   // --- Update enemy bullets ---
