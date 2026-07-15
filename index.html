@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Qwen3.6-27B Tiny Games</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #0a0a0a; color: #fff; min-height: 100vh; }
+    .container { max-width: 800px; margin: 0 auto; padding: 2rem 1.5rem; }
+    header { text-align: center; padding: 3rem 0 2rem; }
+    header h1 { font-size: 2rem; font-weight: 800; background: linear-gradient(135deg, #60a5fa, #a78bfa, #f472b6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 0.5rem; }
+    header p { color: #999; font-size: 0.95rem; }
+    .game-list { display: grid; gap: 1.25rem; margin-top: 2rem; }
+    .game-card { background: #141414; border: 1px solid #222; border-radius: 16px; padding: 1.25rem 1.5rem; text-decoration: none; color: inherit; transition: all 0.2s ease; display: block; }
+    .game-card:hover { border-color: #60a5fa; transform: translateY(-2px); box-shadow: 0 8px 30px rgba(96,165,250,0.15); }
+    .game-card .row { display: flex; align-items: center; justify-content: space-between; }
+    .game-card .title { font-size: 1.1rem; font-weight: 600; margin-bottom: 0.25rem; }
+    .game-card .desc { font-size: 0.85rem; color: #888; }
+    .badge { font-size: 0.75rem; padding: 0.3rem 0.75rem; border-radius: 999px; font-weight: 500; flex-shrink: 0; }
+    .badge-new { background: rgba(96,165,250,0.15); color: #60a5fa; }
+    .badge-play { background: rgba(52,211,153,0.15); color: #34d399; }
+    footer { text-align: center; padding: 3rem 0 2rem; color: #555; font-size: 0.8rem; }
+    footer a { color: #60a5fa; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🎮 Tiny Games</h1>
+      <p>由 Qwen3.6-27B 生成的純 HTML 小遊戲，零依賴，瀏覽器直接運行</p>
+    </header>
+
+    <div class="game-list">
+      <a href="html/space-shooter.html" class="game-card">
+        <div class="row">
+          <div>
+            <div class="title">🚀 Space Shooter</div>
+            <div class="desc">經典太空射擊遊戲 — 方向鍵操作，射擊敵人、累積分數、生存到底</div>
+          </div>
+          <div style="display:flex;gap:0.5rem;align-items:center;">
+            <span class="badge badge-new">NEW</span>
+            <span class="badge badge-play">PLAY →</span>
+          </div>
+        </div>
+      </a>
+    </div>
+
+    <footer>
+      Made with ❤️ by <a href="https://github.com/ckw19810413">ckw19810413</a> · Powered by <a href="https://huggingface.co/Qwen/Qwen3.6-27B">Qwen3.6-27B</a>
+    </footer>
+  </div>
+</body>
+</html>
