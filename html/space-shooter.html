@@ -963,12 +963,12 @@ function render() {
   drawNeonText(`SCORE  ${score}`, 120, 30, 20, '#0ff', 'left');
 
   // Lives
+  ctx.save();
+  ctx.shadowColor = '#0f0';
+  ctx.shadowBlur = 8;
   for (let i = 0; i < lives; i++) {
     const lx = 20 + i * 28;
     const ly = 28;
-    ctx.save();
-    ctx.shadowColor = '#0f0';
-    ctx.shadowBlur = 8;
     ctx.strokeStyle = '#0f0';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
@@ -980,8 +980,8 @@ function render() {
     ctx.lineTo(lx + 7, ly + 4);
     ctx.closePath();
     ctx.stroke();
-    ctx.shadowBlur = 0;
   }
+  ctx.restore();
 
   // Level
   drawNeonText(`LEVEL ${level}`, GAME_W - 80, 30, 18, '#ff0', 'right');
