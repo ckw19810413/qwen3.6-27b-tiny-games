@@ -691,7 +691,7 @@ function update(dt) {
     if (player.invincibleTimer <= 0) player.invincible = false;
   }
 
-  // --- Update player bullets ---
+  // --- Update player bullets (with size cap) ---
   for (let i = playerBullets.length - 1; i >= 0; i--) {
     const b = playerBullets[i];
     b.y += b.vy * dt;
@@ -700,16 +700,21 @@ function update(dt) {
       playerBullets.splice(i, 1);
     }
   }
+  // Cap array size (emergency cleanup)
+  if (playerBullets.length > MAX_BULLETS) {
+    playerBullets.splice(0, playerBullets.length - MAX_BULLETS);
+  }
 
   // --- Spawn enemies ---
   const spawnRate = Math.max(0.3, 1.2 - level * 0.08);
   spawnTimer -= dt;
   if (spawnTimer <= 0) {
     spawnTimer = spawnRate;
-    // Sometimes spawn in groups
-    const count = level >= 4 && Math.random() < 0.3 ? randInt(2, 3 + Math.floor(level/3)) : 1;
+    // Sometimes spawn in groups (immediate, no setTimeout to avoid accumulation)
+    const count = (enemies.length < MAX_ENEMIES) && level >= 4 && Math.random() < 0.3
+      ? randInt(2, 3 + Math.floor(level/3)) : 1;
     for (let i = 0; i < count; i++) {
-      setTimeout(() => { if (gameState === 'playing') spawnEnemy(); }, i * 200);
+      if (enemies.length < MAX_ENEMIES) spawnEnemy();
     }
   }
 
@@ -1026,33 +1031,71 @@ function render() {
   }
 }
 
+// --- Safety: max array sizes to prevent memory leaks ---
+const MAX_PARTICLES = 500;
+const MAX_EXPLOSIONS = 50;
+const MAX_ENEMIES = 100;
+const MAX_BULLETS = 300;
+
+// --- Canvas context lost handling ---
+canvas.addEventListener('webglcontextlost', function(e) {
+  e.preventDefault();
+  gameState = 'gameover';
+  document.getElementById('final-score').textContent = score;
+  document.getElementById('final-level').textContent = level;
+  document.getElementById('game-over-screen').classList.remove('hidden');
+});
+
+canvas.addEventListener('webglrestored', function(e) {
+  initAudio();
+  gameState = 'title';
+  lastTime = performance.now();
+  requestAnimationFrame(gameLoop);
+});
+
+// --- Error boundary ---
+function safeUpdate(dt) {
+  try { update(dt); }
+  catch(e) { console.error('Update error:', e); gameState = 'gameover'; }
+}
+
+function safeRender() {
+  try { render(); }
+  catch(e) { console.error('Render error:', e); }
+}
+
 // --- Game Loop ---
 function gameLoop(timestamp) {
-  const dt = Math.min((timestamp - lastTime) / 1000, 0.05); // cap at 50ms
-  lastTime = timestamp;
+  try {
+    const dt = Math.min((timestamp - lastTime) / 1000, 0.05); // cap at 50ms
+    lastTime = timestamp;
 
-  // Update stars even in title/gameover
-  if (gameState !== 'playing') {
-    for (const s of stars) {
-      s.y += s.speed * dt * 60;
-      if (s.y > GAME_H) { s.y = 0; s.x = Math.random() * GAME_W; }
+    // Update stars even in title/gameover
+    if (gameState !== 'playing') {
+      for (const s of stars) {
+        s.y += s.speed * dt * 60;
+        if (s.y > GAME_H) { s.y = 0; s.x = Math.random() * GAME_W; }
+      }
+      // Update particles/explosions for visual flair
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.life -= dt;
+        if (p.life <= 0) particles.splice(i, 1);
+      }
+      for (let i = explosions.length - 1; i >= 0; i--) {
+        explosions[i].life -= dt;
+        if (explosions[i].life <= 0) explosions.splice(i, 1);
+      }
     }
-    // Update particles/explosions for visual flair
-    for (let i = particles.length - 1; i >= 0; i--) {
-      const p = particles[i];
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      p.life -= dt;
-      if (p.life <= 0) particles.splice(i, 1);
-    }
-    for (let i = explosions.length - 1; i >= 0; i--) {
-      explosions[i].life -= dt;
-      if (explosions[i].life <= 0) explosions.splice(i, 1);
-    }
+
+    safeUpdate(dt);
+    safeRender();
+  } catch(e) {
+    console.error('Game loop error:', e);
+    gameState = 'gameover';
   }
-
-  update(dt);
-  render();
   requestAnimationFrame(gameLoop);
 }
 
