@@ -305,7 +305,7 @@ function spawnEnemy() {
 
   const t = ENEMY_TYPES[type];
   const speedMult = 1 + (difficulty - 1) * 0.08;
-  const spawnPattern = Math.random() < 0.5 ? 'straight' : (Math.random() < 0.5 ? 'sine' : 'vshape');
+  const spawnPattern = Math.random() < 0.5 ? 'sine' : 'vshape';
 
   enemies.push({
     x: rand(30, GAME_W - 30),
@@ -930,8 +930,10 @@ function render() {
 
   // Explosions
   for (const e of explosions) {
-    const alpha = e.life / 0.3;
-    drawGlow(e.x, e.y, e.radius, e.color + Math.floor(alpha * 40).toString(16).padStart(2, '0'));
+    const alpha = Math.max(0, e.life / 0.3);
+    const hexAlpha = Math.round(alpha * 255).toString(16).padStart(2, '0');
+    const flashColor = e.color + hexAlpha;
+    drawGlow(e.x, e.y, e.radius, flashColor);
   }
 
   // Particles
