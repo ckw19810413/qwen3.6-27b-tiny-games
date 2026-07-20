@@ -603,7 +603,8 @@
       }
 
       function handleGameOver() {
-        dropTimer = null;
+        if (dropTimer) { clearInterval(dropTimer); dropTimer = null; }
+        if (animationId) { cancelAnimationFrame(animationId); animationId = null; }
         updateUI();
         overlayTitle.textContent = 'GAME OVER';
         overlayTitle.className = 'status-text game-over-text';
