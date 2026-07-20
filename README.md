@@ -10,6 +10,19 @@
 
 ## 🎮 Games
 
+### Tetris
+A classic block-stacking puzzle game built entirely with vanilla HTML/CSS/JS.
+
+- All 7 tetrominoes (I, O, T, S, Z, J, L) with rotation
+- Ghost piece preview, next piece display
+- Score system with level progression (speed increases)
+- High score saved locally
+- Keyboard controls (arrow keys + space for hard drop)
+- Touch controls and swipe gestures for mobile
+- Pause/resume with P key
+
+**Play now:** [html/tetris.html](https://ckw19810413.github.io/qwen3.6-27b-tiny-games/html/tetris.html)
+
 ### Space Shooter
 A classic space shooter game built entirely with vanilla HTML/CSS/JS.
 
@@ -23,9 +36,10 @@ A classic space shooter game built entirely with vanilla HTML/CSS/JS.
 
 ## 🚀 Play Online
 
-Click the badge below to start playing immediately in your browser:
+Click the badges below to start playing immediately in your browser:
 
-[![Play Now](https://img.shields.io/badge/▶️_Play_Space_Shooter-Online-blue?style=for-the-badge)](https://ckw19810413.github.io/qwen3.6-27b-tiny-games/html/space-shooter.html)
+[![Play Tetris](https://img.shields.io/badge/▶️_Play_Tetris-Online-blue?style=for-the-badge)](https://ckw19810413.github.io/qwen3.6-27b-tiny-games/html/tetris.html)
+[![Play Space Shooter](https://img.shields.io/badge/▶️_Play_Space_Shooter-Online-blue?style=for-the-badge)](https://ckw19810413.github.io/qwen3.6-27b-tiny-games/html/space-shooter.html)
 
 ## 🧠 How It Works
 
