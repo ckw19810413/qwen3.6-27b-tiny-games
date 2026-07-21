@@ -23,6 +23,18 @@ A classic block-stacking puzzle game built entirely with vanilla HTML/CSS/JS.
 
 **Play now:** [html/tetris.html](https://ckw19810413.github.io/qwen3.6-27b-tiny-games/html/tetris.html)
 
+### Retro Fighters (Street Fighter 2-style)
+A retro arcade fighting game with local 2-player and online P2P multiplayer.
+
+- 4 characters: Ryu, Ken, Blanka, Gouki — each with unique stats and special moves
+- **Online P2P** — WebRTC via PeerJS (no server needed), host creates room, client joins
+- **Local 2-player** — P1: Arrow keys + G/H/J | P2: WASD + Numpad 1/2/3
+- Best-of-3 rounds, 99-second timer, combo counter, blocking, projectiles
+- Pixel-art fighters drawn with canvas, city stage with animated background
+- Web Audio API sound effects, touch controls for mobile
+
+**Play now:** [html/fighting-game.html](https://ckw19810413.github.io/qwen3.6-27b-tiny-games/html/fighting-game.html)
+
 ### Space Shooter
 A classic space shooter game built entirely with vanilla HTML/CSS/JS.
 
@@ -38,6 +50,7 @@ A classic space shooter game built entirely with vanilla HTML/CSS/JS.
 
 Click the badges below to start playing immediately in your browser:
 
+[![Play Retro Fighters](https://img.shields.io/badge/▶️_Play_Retro_Fighters-Online-red?style=for-the-badge)](https://ckw19810413.github.io/qwen3.6-27b-tiny-games/html/fighting-game.html)
 [![Play Tetris](https://img.shields.io/badge/▶️_Play_Tetris-Online-blue?style=for-the-badge)](https://ckw19810413.github.io/qwen3.6-27b-tiny-games/html/tetris.html)
 [![Play Space Shooter](https://img.shields.io/badge/▶️_Play_Space_Shooter-Online-blue?style=for-the-badge)](https://ckw19810413.github.io/qwen3.6-27b-tiny-games/html/space-shooter.html)
 
