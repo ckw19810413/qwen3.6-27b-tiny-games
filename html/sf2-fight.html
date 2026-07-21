@@ -1,0 +1,1648 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Street Fighter 2 - 格鬥遊戲</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #0a0a0a;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  overflow: hidden;
+  font-family: 'Courier New', monospace;
+}
+#gameCanvas {
+  border: 2px solid #333;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+#footer {
+  color: #666;
+  font-size: 12px;
+  margin-top: 10px;
+  text-align: center;
+}
+</style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+<div id="footer">Built by @slashman413</div>
+
+<script>
+// ============================================================
+// 街霸風格格鬥遊戲 - Street Fighter 2 Style Fighting Game
+// 單文件純 JS 實現，無需外部依賴
+// ============================================================
+
+// ============================================================
+// 基礎圖形繪製類別 - Sprite
+// 負責所有角色的像素級渲染
+// ============================================================
+class Sprite {
+  constructor(config) {
+    this.x = config.x || 0;
+    this.y = config.y || 0;
+    this.width = config.width || 40;
+    this.height = config.height || 80;
+    this.color = config.color || '#ffffff';
+    this.facing = config.facing || 1; // 1=right, -1=left
+  }
+
+  draw(ctx, offsetX, offsetY, alpha) {
+    ctx.save();
+    if (alpha !== undefined) ctx.globalAlpha = alpha;
+    this.drawCharacter(ctx, offsetX, offsetY);
+    ctx.restore();
+  }
+
+  drawCharacter(ctx, ox, oy) {}
+
+  getRect() {
+    return { x: this.x, y: this.y, w: this.width, h: this.height };
+  }
+}
+
+// ============================================================
+// 格鬥家類別 - Fighter
+// 包含狀態機、攻擊系統、受擊邏輯、碰撞檢測
+// ============================================================
+class Fighter extends Sprite {
+  constructor(config) {
+    super(config);
+
+    // 角色基本屬性
+    this.name = config.name || 'Fighter';
+    this.groundY = config.groundY || 400;
+    this.moveSpeed = config.moveSpeed || 3;
+    this.jumpForce = config.jumpForce || -13;
+    this.gravity = config.gravity || 0.6;
+    this.maxHealth = config.maxHealth || 100;
+    this.health = config.maxHealth || 100;
+    this.colorScheme = config.colorScheme || {
+      skin: '#ffcc99', gi: '#ffffff', giBorder: '#cccccc',
+      accent: '#ff0000', hair: '#333333', pants: '#ffffff',
+      belt: '#000000', shoes: '#333333', headband: '#ff0000',
+      projectileColor: '#0066ff'
+    };
+
+    // 物理狀態
+    this.vx = 0;
+    this.vy = 0;
+    this.grounded = true;
+
+    // 狀態機
+    this.state = 'idle'; // idle, walk, jump, crouch, attack_light, attack_heavy, attack_projectile, attack_anti_air, hit, knockdown, getup
+    this.stateTimer = 0;
+    this.stateFrame = 0;
+
+    // 攻擊數據定義
+    this.attacks = config.attacks || {};
+
+    // 防禦系統
+    this.blocking = false;
+    this.invincible = false;
+    this.invincibleFrames = 0;
+
+    // 受擊相關
+    this.hitstunFrames = 0;
+    this.knockdownFrames = 0;
+    this.getupFrames = 0;
+    this.hitFlash = 0;
+    this.attackHit = false; // 防止同一攻擊多次命中
+
+    // 投影體
+    this.hasProjectile = false;
+    this.projX = this.x;
+    this.projY = this.y;
+
+    // 動畫
+    this.animFrame = 0;
+    this.animTimer = 0;
+    this.walkCycle = 0;
+  }
+
+  // 獲取 hurtbox（受擊判定框）
+  // hurtbox 是角色可以被擊中的區域
+  getHurtbox() {
+    let w, h, yOffset;
+    if (this.state === 'crouch') {
+      w = 30; h = 50; yOffset = 30;
+    } else if (this.state === 'knockdown') {
+      w = 70; h = 20; yOffset = 60;
+    } else {
+      w = 30; h = 75; yOffset = 5;
+    }
+    return { x: this.x - w / 2, y: this.y - h + yOffset, w: w, h: h };
+  }
+
+  // 獲取 hitbox（攻擊判定框）
+  // 只有攻擊的 active frames 期間才有效
+  getHitbox() {
+    if (!this.isAttackState()) return null;
+    const atk = this.getAttackData();
+    if (!atk) return null;
+
+    // 只在 active frames 期間生成 hitbox
+    if (this.stateFrame < atk.startup || this.stateFrame >= atk.startup + atk.active) {
+      return null;
+    }
+
+    const box = atk.hitbox;
+    let bx, by, bw, bh;
+
+    if (box.type === 'punch') {
+      bx = this.facing === 1 ? this.x + 10 : this.x - 10 - box.w;
+      by = this.y - 55;
+      bw = box.w; bh = box.h;
+    } else if (box.type === 'kick') {
+      bx = this.facing === 1 ? this.x + 5 : this.x - 5 - box.w;
+      by = this.y - 40;
+      bw = box.w; bh = box.h;
+    } else if (box.type === 'anti_air') {
+      bx = this.facing === 1 ? this.x - 5 : this.x - 25;
+      by = this.y - 80;
+      bw = 30; bh = 40;
+    } else if (box.type === 'tornado') {
+      // 龍捲旋風腳的弧形判定範圍較大
+      bx = this.facing === 1 ? this.x - 10 : this.x - 30;
+      by = this.y - 50;
+      bw = 40; bh = 45;
+    } else {
+      return null;
+    }
+
+    return {
+      x: bx, y: by, w: bw, h: bh,
+      damage: atk.damage,
+      knockback: atk.knockback,
+      knockup: atk.knockup || 0,
+      type: box.type,
+      owner: this
+    };
+  }
+
+  isAttackState() {
+    return this.state.startsWith('attack_');
+  }
+
+  getAttackData() {
+    if (this.state === 'attack_light') return this.attacks.lightPunch;
+    if (this.state === 'attack_heavy') return this.attacks.heavyKick;
+    if (this.state === 'attack_projectile') return this.attacks.projectile;
+    if (this.state === 'attack_anti_air') return this.attacks.antiAir;
+    return null;
+  }
+
+  canTakeHit() {
+    if (this.state === 'knockdown' || this.state === 'getup') return false;
+    if (this.invincible) return false;
+    if (this.state === 'hit') return false;
+    return true;
+  }
+
+  // 被擊中處理
+  // 支援格擋減伤 80%、倒地、擊中硬直
+  takeHit(damage, knockback, knockup, hitbox, attacker) {
+    let actualDamage = damage;
+    let wasBlocked = false;
+
+    // 蹲下格擋或反向格擋（朝向遠離攻擊者方向）
+    if (this.blocking || this.isBlockingSide(attacker)) {
+      actualDamage = Math.floor(damage * 0.2);
+      knockback *= 0.3;
+      wasBlocked = true;
+    }
+
+    // 格擋減伤 80%
+    this.health = Math.max(0, this.health - actualDamage);
+    this.hitFlash = 6;
+
+    // 格擋效果：小後退
+    this.vx = (hitbox.x < this.x ? 1 : -1) * knockback;
+
+    if (wasBlocked) return 'blocked';
+
+    // 根據傷害量決定是擊中(stun)還是倒地(knockdown)
+    if (actualDamage >= 14 || knockup > 0) {
+      // 倒地
+      this.state = 'knockdown';
+      this.knockdownFrames = 45;
+      this.stateFrame = 0;
+      this.vx = (hitbox.x < this.x ? 1 : -1) * knockback;
+      this.vy = -knockup;
+      this.grounded = false;
+    } else {
+      // 擊中硬直
+      this.state = 'hit';
+      this.hitstunFrames = 10 + Math.floor(damage / 2);
+      this.stateFrame = 0;
+      this.vx = (hitbox.x < this.x ? 1 : -1) * knockback;
+      this.vy = -knockup * 0.3;
+    }
+    return 'hit';
+  }
+
+  // 判斷是否朝著正確方向格擋
+  // 當角色朝對手方向時，按住遠離對手的方向即可格擋
+  isBlockingSide(attacker) {
+    if (this.blocking) return true;
+    if (this.state === 'hit' || this.isAttackState()) return false;
+    if (!attacker) return false;
+
+    // 判斷角色相對於攻擊者的位置
+    if (this.facing === 1) {
+      // 朝右，按 A 或 左方向鍵 = 後退方向 = 格擋方向
+      return game.keys['KeyA'] || game.keys['ArrowLeft'];
+    } else {
+      // 朝左，按 D 或 右方向鍵 = 後退方向 = 格擋方向
+      return game.keys['KeyD'] || game.keys['ArrowRight'];
+    }
+  }
+
+  // 更新邏輯
+  update() {
+    this.animTimer++;
+    if (this.animTimer >= 8) {
+      this.animTimer = 0;
+      this.animFrame++;
+    }
+
+    // 無敵幀計數
+    if (this.invincible) {
+      this.invincibleFrames--;
+      if (this.invincibleFrames <= 0) this.invincible = false;
+    }
+
+    // 命中閃光
+    if (this.hitFlash > 0) this.hitFlash--;
+
+    // 狀態機更新
+    this.updateState();
+
+    // 物理更新
+    if (!this.grounded) {
+      this.vy += this.gravity;
+      this.y += this.vy;
+      if (this.y >= this.groundY) {
+        this.y = this.groundY;
+        this.vy = 0;
+        this.grounded = true;
+        if (this.state === 'jump') {
+          this.state = 'idle';
+          this.stateFrame = 0;
+        }
+      }
+    }
+
+    // 水平移動
+    this.x += this.vx;
+    this.vx *= 0.85;
+
+    // 邊界限制
+    const margin = 20;
+    this.x = Math.max(margin, Math.min(game.canvas.width - margin, this.x));
+
+    this.stateFrame++;
+
+    // 更新投影體位置
+    if (this.state === 'attack_projectile') {
+      this.projX = this.x + (this.facing * 30);
+      this.projY = this.y - 50;
+    }
+  }
+
+  // 狀態機主循環
+  updateState() {
+    if (this.state === 'idle') {
+      // 呼吸動畫
+    } else if (this.state === 'walk') {
+      this.walkCycle += 0.15;
+    } else if (this.state === 'hit') {
+      this.hitstunFrames--;
+      if (this.hitstunFrames <= 0) {
+        this.state = 'idle';
+        this.stateFrame = 0;
+        this.vx = 0;
+      }
+    } else if (this.state === 'knockdown') {
+      this.knockdownFrames--;
+      if (this.knockdownFrames <= 0) {
+        this.state = 'getup';
+        this.getupFrames = 20;
+        this.stateFrame = 0;
+      }
+    } else if (this.state === 'getup') {
+      this.getupFrames--;
+      if (this.getupFrames <= 0) {
+        this.state = 'idle';
+        this.stateFrame = 0;
+        this.grounded = true;
+      }
+    } else if (this.state === 'jump') {
+      // 空中可攻擊
+    } else if (this.state === 'crouch') {
+      this.blocking = true;
+    } else if (this.isAttackState()) {
+      const atk = this.getAttackData();
+      if (atk) {
+        const totalFrames = atk.startup + atk.active + atk.recovery;
+        if (this.stateFrame >= totalFrames) {
+          if (this.state === 'attack_projectile') {
+            // 投擲後返回 idle
+            this.state = 'idle';
+          } else {
+            this.state = 'idle';
+          }
+          this.stateFrame = 0;
+          this.attackHit = false;
+          this.vx = 0;
+        }
+      }
+    }
+
+    // 蹲下格擋判斷
+    if (this.grounded && !this.isAttackState() && this.state !== 'hit' && this.state !== 'knockdown' && this.state !== 'getup') {
+      const isP1 = this.name === 'Ryu';
+      const isCrouching = isP1 ? game.keys['KeyS'] : game.keys['ArrowDown'];
+      if (isCrouching) {
+        this.blocking = true;
+      } else {
+        this.blocking = false;
+      }
+    } else if (!this.grounded) {
+      this.blocking = false;
+    }
+  }
+
+  // 跳躍
+  jump() {
+    if (!this.grounded) return;
+    if (this.state === 'hit' || this.state === 'knockdown' || this.state === 'getup') return;
+    if (this.isAttackState() && this.state !== 'attack_projectile') return;
+
+    this.vy = this.jumpForce;
+    this.grounded = false;
+    this.state = 'jump';
+    this.stateFrame = 0;
+  }
+
+  // 移動
+  move(dir) {
+    if (this.state === 'hit' || this.state === 'knockdown' || this.state === 'getup') return;
+    if (this.isAttackState() && this.state !== 'attack_projectile') return;
+
+    if (!this.grounded) return;
+
+    if (this.state !== 'attack_projectile') {
+      this.state = dir !== 0 ? 'walk' : 'idle';
+    }
+    if (dir !== 0) {
+      this.state = 'walk';
+      this.x += dir * this.moveSpeed;
+      this.x = Math.max(20, Math.min(game.canvas.width - 20, this.x));
+    }
+  }
+
+  // 出拳攻擊
+  punch(type) {
+    if (this.state === 'hit' || this.state === 'knockdown' || this.state === 'getup') return;
+    if (this.isAttackState() && this.state !== 'attack_projectile') return;
+
+    this.attackHit = false;
+
+    if (type === 'light') {
+      this.state = 'attack_light';
+      this.stateFrame = 0;
+    } else if (type === 'heavy') {
+      this.state = 'attack_heavy';
+      this.stateFrame = 0;
+    } else if (type === 'projectile') {
+      if (this.hasProjectile) return;
+      this.state = 'attack_projectile';
+      this.stateFrame = 0;
+      const atk = this.attacks.projectile;
+      const proj = new Projectile({
+        x: this.x + this.facing * 40,
+        y: this.y - 50,
+        vx: this.facing * atk.speed,
+        damage: atk.damage,
+        owner: this,
+        color: this.colorScheme.projectileColor,
+        sprite: this.name === 'Ryu' ? 'hadoken' : 'fireball'
+      });
+      game.projectiles.push(proj);
+      this.hasProjectile = true;
+      this.projX = this.x + this.facing * 40;
+      this.projY = this.y - 50;
+    } else if (type === 'anti_air') {
+      this.state = 'attack_anti_air';
+      this.stateFrame = 0;
+      this.invincible = true;
+      this.invincibleFrames = 8;
+      this.vy = -8;
+      this.grounded = false;
+    }
+  }
+
+  // 繪製格鬥家角色
+  drawCharacter(ctx, ox, oy) {
+    const x = this.x + ox;
+    const y = this.y + oy;
+    const f = this.facing;
+    const cs = this.colorScheme;
+
+    // 閃光效果
+    if (this.hitFlash > 0) {
+      ctx.globalAlpha = 0.7 + Math.sin(this.hitFlash * 2) * 0.3;
+    }
+    // 無敵閃爍
+    if (this.invincible) {
+      ctx.globalAlpha = 0.4 + Math.sin(Date.now() * 0.02) * 0.3;
+    }
+
+    let bodyY = y;
+    let legAnim = 0;
+    let crouchOffset = 0;
+    let punchExtend = 0;
+    let kickExtend = 0;
+
+    // 根據狀態計算動畫偏移
+    if (this.state === 'idle') {
+      bodyY = y - Math.sin(this.animTimer * 0.3 + this.animFrame) * 2;
+    } else if (this.state === 'walk') {
+      legAnim = Math.sin(this.walkCycle) * 8;
+    } else if (this.state === 'crouch') {
+      crouchOffset = 25;
+    } else if (this.state === 'jump') {
+      bodyY = y - 5;
+    } else if (this.state === 'hit') {
+      bodyY = y + 5;
+    } else if (this.state === 'knockdown') {
+      this._drawKnockdown(ctx, x, y, f, cs);
+      return;
+    } else if (this.state === 'getup') {
+      const prog = 1 - this.getupFrames / 20;
+      bodyY = y - prog * 40;
+      if (prog < 0.3) ctx.globalAlpha = 0.5;
+    }
+
+    // 攻擊動畫
+    if (this.state === 'attack_light') {
+      const atk = this.attacks.lightPunch;
+      if (this.stateFrame < atk.startup) {
+        punchExtend = -3;
+        bodyY -= 3;
+      } else if (this.stateFrame < atk.startup + atk.active) {
+        punchExtend = 25;
+      } else {
+        punchExtend = 5 * (1 - (this.stateFrame - atk.startup - atk.active) / atk.recovery);
+      }
+    } else if (this.state === 'attack_heavy') {
+      const atk = this.attacks.heavyKick;
+      if (this.stateFrame < atk.startup) {
+        kickExtend = -5;
+        bodyY -= 5;
+      } else if (this.stateFrame < atk.startup + atk.active) {
+        kickExtend = 35;
+        crouchOffset = 5;
+      } else {
+        kickExtend = 15 * (1 - (this.stateFrame - atk.startup - atk.active) / atk.recovery);
+      }
+    } else if (this.state === 'attack_anti_air') {
+      const atk = this.attacks.antiAir;
+      if (this.stateFrame < atk.startup) {
+        bodyY -= 3;
+      } else if (this.stateFrame < atk.startup + atk.active) {
+        punchExtend = 20;
+        bodyY -= 10;
+      }
+    } else if (this.state === 'attack_projectile') {
+      const atk = this.attacks.projectile;
+      if (this.stateFrame < atk.startup) {
+        punchExtend = -5;
+      } else if (this.stateFrame < atk.startup + atk.active) {
+        punchExtend = 15;
+      }
+    }
+
+    ctx.save();
+    ctx.translate(x, bodyY);
+
+    // 後方腿
+    ctx.fillStyle = cs.pants;
+    if (kickExtend > 0) {
+      ctx.fillRect(f * 5, 35 - crouchOffset, 12, 25 - crouchOffset + kickExtend * 0.5);
+      ctx.fillRect(f * 12, 40 - crouchOffset, kickExtend * 0.8, 8);
+      ctx.fillStyle = cs.shoes;
+      ctx.fillRect(f * 12 + kickExtend * 0.8 - 2, 42 - crouchOffset, 10, 8);
+    } else {
+      ctx.fillRect(f * 2, 40 - crouchOffset, 12, 25 - crouchOffset + legAnim);
+      ctx.fillStyle = cs.shoes;
+      ctx.fillRect(f * 2, 60 - crouchOffset + legAnim, 14, 6);
+    }
+    ctx.fillStyle = cs.pants;
+
+    // 後方手臂
+    ctx.fillStyle = cs.skin;
+    ctx.fillRect(f * -2, -25 - crouchOffset, 8, 25);
+
+    // 身體/襯衫
+    ctx.fillStyle = cs.gi;
+    ctx.fillRect(-12, -40 - crouchOffset, 24, 30);
+    ctx.strokeStyle = cs.giBorder;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(-12, -40 - crouchOffset, 24, 30);
+
+    // 腰帶
+    ctx.fillStyle = cs.belt;
+    ctx.fillRect(-12, -12 - crouchOffset, 24, 4);
+
+    // 前方腿
+    if (kickExtend > 0) {
+      ctx.fillStyle = cs.pants;
+      ctx.fillRect(f * -8, 40 - crouchOffset, 12, 25 - crouchOffset);
+      ctx.fillStyle = cs.shoes;
+      ctx.fillRect(f * -8, 60 - crouchOffset, 14, 6);
+    } else {
+      ctx.fillStyle = cs.pants;
+      ctx.fillRect(f * -8, 40 - crouchOffset, 12, 25 - crouchOffset - legAnim);
+      ctx.fillStyle = cs.shoes;
+      ctx.fillRect(f * -8, 60 - crouchOffset - legAnim, 14, 6);
+    }
+
+    // 頭部
+    ctx.fillStyle = cs.skin;
+    const headY = -50 - crouchOffset;
+    ctx.fillRect(-8, headY, 16, 16);
+    ctx.fillStyle = cs.hair;
+    ctx.fillRect(-9, headY - 2, 18, 6);
+    ctx.fillStyle = cs.headband;
+    ctx.fillRect(-9, headY + 4, 18, 3);
+    ctx.fillRect(f * -10, headY + 2, 4, 8);
+
+    // 眼睛
+    if (this.state === 'hit') {
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(-4, headY + 8); ctx.lineTo(-1, headY + 11); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-1, headY + 8); ctx.lineTo(-4, headY + 11); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(1, headY + 8); ctx.lineTo(4, headY + 11); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(4, headY + 8); ctx.lineTo(1, headY + 11); ctx.stroke();
+    } else {
+      ctx.fillStyle = '#000';
+      ctx.fillRect(f * 2 - 1, headY + 8, 3, 3);
+    }
+
+    // 嘴巴
+    if (this.isAttackState()) {
+      ctx.fillStyle = '#000';
+      ctx.fillRect(-2, headY + 13, 5, 2);
+    }
+
+    // 前方手臂（攻擊動畫）
+    if (punchExtend > 0) {
+      ctx.fillStyle = cs.skin;
+      ctx.fillRect(f * 10, -30 - crouchOffset, punchExtend, 8);
+      ctx.fillRect(f * 10 + punchExtend - 4, -32 - crouchOffset, 8, 12);
+      ctx.fillStyle = cs.accent === '#ff0000' ? '#cc0000' : '#ffaa00';
+      ctx.fillRect(f * 10 + punchExtend - 5, -33 - crouchOffset, 10, 14);
+    } else if (punchExtend < 0) {
+      ctx.fillStyle = cs.skin;
+      ctx.fillRect(f * -12, -30 - crouchOffset, 14, 8);
+      ctx.fillStyle = cs.accent === '#ff0000' ? '#cc0000' : '#ffaa00';
+      ctx.fillRect(f * -14, -32 - crouchOffset, 10, 14);
+    } else {
+      ctx.fillStyle = cs.skin;
+      ctx.fillRect(f * 8, -25 - crouchOffset, 10, 20);
+      ctx.fillStyle = cs.accent === '#ff0000' ? '#cc0000' : '#ffaa00';
+      ctx.fillRect(f * 7, -10 - crouchOffset, 12, 10);
+    }
+
+    // Shoryuken 昇龍拳特效
+    if (this.state === 'attack_anti_air' && this.stateFrame >= this.attacks.antiAir.startup) {
+      ctx.fillStyle = 'rgba(100, 150, 255, 0.5)';
+      for (let i = 0; i < 3; i++) {
+        ctx.fillRect(f * 10 + (Math.random() - 0.5) * 20, -40 - crouchOffset + i * 10, 6, 6);
+      }
+    }
+
+    // 龍捲旋風腳特效
+    if (this.state === 'attack_heavy' && this.isAttackState() && this.attacks.heavyKick &&
+        this.attacks.heavyKick.type === 'tornado' &&
+        this.stateFrame >= this.attacks.heavyKick.startup &&
+        this.stateFrame < this.attacks.heavyKick.startup + this.attacks.heavyKick.active) {
+      ctx.fillStyle = 'rgba(255, 200, 0, 0.4)';
+      for (let i = 0; i < 5; i++) {
+        const angle = (this.stateFrame * 0.3) + i * 1.2;
+        const px = Math.cos(angle) * 15;
+        const py = -10 - crouchOffset + Math.sin(angle) * 12;
+        ctx.fillRect(px, py, 4, 4);
+      }
+    }
+
+    ctx.restore();
+  }
+
+  // 倒地繪製
+  _drawKnockdown(ctx, x, y, f, cs) {
+    ctx.save();
+    ctx.translate(x, y);
+
+    ctx.fillStyle = cs.gi;
+    ctx.fillRect(-30, -5, 60, 12);
+
+    ctx.fillStyle = cs.skin;
+    ctx.fillRect(-25, -15, 14, 14);
+    ctx.fillStyle = cs.hair;
+    ctx.fillRect(-26, -17, 16, 5);
+    ctx.fillStyle = cs.headband;
+    ctx.fillRect(-26, -10, 16, 3);
+
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(-20, -9); ctx.lineTo(-16, -5); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-16, -9); ctx.lineTo(-20, -5); ctx.stroke();
+
+    ctx.restore();
+  }
+}
+
+// ============================================================
+// 飛行道具類 - Projectile
+// 波動拳、氣功波等投射物
+// ============================================================
+class Projectile {
+  constructor(config) {
+    this.x = config.x || 0;
+    this.y = config.y || 0;
+    this.vx = config.vx || 5;
+    this.damage = config.damage || 10;
+    this.owner = config.owner || null;
+    this.width = config.width || 30;
+    this.height = config.height || 20;
+    this.color = config.color || '#0066ff';
+    this.sprite = config.sprite || 'projectile';
+    this.active = true;
+    this.trail = [];
+  }
+
+  update() {
+    this.trail.push({ x: this.x, y: this.y, alpha: 1 });
+    if (this.trail.length > 8) this.trail.shift();
+    this.trail.forEach(t => t.alpha -= 0.12);
+    this.x += this.vx;
+    if (this.x < -50 || this.x > game.canvas.width + 50) {
+      this.active = false;
+    }
+  }
+
+  getHitbox() {
+    return { x: this.x - this.width / 2, y: this.y - this.height / 2, w: this.width, h: this.height };
+  }
+
+  draw(ctx, ox, oy) {
+    for (let i = 0; i < this.trail.length; i++) {
+      const t = this.trail[i];
+      if (t.alpha <= 0) continue;
+      ctx.globalAlpha = t.alpha * 0.4;
+      ctx.fillStyle = this.color;
+      const size = this.width * 0.3;
+      ctx.fillRect(t.x + ox - size / 2, t.y + oy - size / 2, size, size);
+    }
+
+    ctx.globalAlpha = 1;
+    const cx = this.x + ox;
+    const cy = this.y + oy;
+
+    if (this.sprite === 'hadoken') {
+      const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, 20);
+      gradient.addColorStop(0, '#ffffff');
+      gradient.addColorStop(0.3, '#88ccff');
+      gradient.addColorStop(0.7, this.color);
+      gradient.addColorStop(1, 'rgba(0, 50, 200, 0)');
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 18, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, 18);
+      gradient.addColorStop(0, '#ffffff');
+      gradient.addColorStop(0.3, '#ffcc66');
+      gradient.addColorStop(0.7, this.color);
+      gradient.addColorStop(1, 'rgba(200, 80, 0, 0)');
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 16, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+    ctx.beginPath();
+    ctx.arc(cx - 3, cy - 3, 5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+// ============================================================
+// 粒子類 - Particle
+// 擊中特效粒子
+// ============================================================
+class Particle {
+  constructor(config) {
+    this.x = config.x || 0;
+    this.y = config.y || 0;
+    this.vx = config.vx || 0;
+    this.vy = config.vy || 0;
+    this.life = config.life || 30;
+    this.maxLife = config.life || 30;
+    this.size = config.size || 4;
+    this.color = config.color || '#ffff00';
+  }
+
+  update() {
+    this.x += this.vx;
+    this.y += this.vy;
+    this.vy += 0.15;
+    this.life--;
+  }
+
+  draw(ctx, ox, oy) {
+    const alpha = this.life / this.maxLife;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = this.color;
+    ctx.fillRect(this.x + ox - this.size / 2, this.y + oy - this.size / 2, this.size, this.size);
+    ctx.globalAlpha = 1;
+  }
+
+  isDead() { return this.life <= 0; }
+}
+
+// ============================================================
+// 音效類 - Sound
+// 使用 Web Audio API 合成音效
+// ============================================================
+class Sound {
+  constructor() {
+    this.ctx = null;
+    this.enabled = true;
+  }
+
+  init() {
+    try {
+      this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    } catch (e) {
+      console.warn('Web Audio not available');
+      this.enabled = false;
+    }
+  }
+
+  play(type) {
+    if (!this.enabled || !this.ctx) return;
+    if (this.ctx.state === 'suspended') this.ctx.resume();
+
+    const now = this.ctx.currentTime;
+
+    if (type === 'punch') {
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.connect(gain); gain.connect(this.ctx.destination);
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(200, now);
+      osc.frequency.exponentialRampToValueAtTime(80, now + 0.08);
+      gain.gain.setValueAtTime(0.15, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+      osc.start(now); osc.stop(now + 0.1);
+    } else if (type === 'kick') {
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.connect(gain); gain.connect(this.ctx.destination);
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(150, now);
+      osc.frequency.exponentialRampToValueAtTime(50, now + 0.15);
+      gain.gain.setValueAtTime(0.18, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+      osc.start(now); osc.stop(now + 0.15);
+    } else if (type === 'projectile') {
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.connect(gain); gain.connect(this.ctx.destination);
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(800, now);
+      osc.frequency.exponentialRampToValueAtTime(200, now + 0.3);
+      gain.gain.setValueAtTime(0.1, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+      osc.start(now); osc.stop(now + 0.3);
+    } else if (type === 'ko') {
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.connect(gain); gain.connect(this.ctx.destination);
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(400, now);
+      osc.frequency.exponentialRampToValueAtTime(50, now + 1.0);
+      gain.gain.setValueAtTime(0.2, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 1.0);
+      osc.start(now); osc.stop(now + 1.0);
+    } else if (type === 'bell') {
+      const osc1 = this.ctx.createOscillator();
+      const gain1 = this.ctx.createGain();
+      osc1.connect(gain1); gain1.connect(this.ctx.destination);
+      osc1.type = 'sine';
+      osc1.frequency.setValueAtTime(880, now);
+      gain1.gain.setValueAtTime(0.15, now);
+      gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+      osc1.start(now); osc1.stop(now + 0.5);
+
+      const osc2 = this.ctx.createOscillator();
+      const gain2 = this.ctx.createGain();
+      osc2.connect(gain2); gain2.connect(this.ctx.destination);
+      osc2.type = 'sine';
+      osc2.frequency.setValueAtTime(1320, now);
+      gain2.gain.setValueAtTime(0.1, now);
+      gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+      osc2.start(now); osc2.stop(now + 0.4);
+    } else if (type === 'block') {
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.connect(gain); gain.connect(this.ctx.destination);
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(300, now);
+      osc.frequency.exponentialRampToValueAtTime(200, now + 0.05);
+      gain.gain.setValueAtTime(0.08, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+      osc.start(now); osc.stop(now + 0.05);
+    }
+  }
+}
+
+// ============================================================
+// 遊戲主類別 - Game
+// 管理遊戲迴圈、碰撞偵測、UI 渲染
+// ============================================================
+class Game {
+  constructor() {
+    this.canvas = document.getElementById('gameCanvas');
+    this.ctx = this.canvas.getContext('2d');
+
+    this.resizeCanvas();
+    window.addEventListener('resize', () => this.resizeCanvas());
+
+    // 遊戲狀態
+    this.state = 'start';
+    this.stateTimer = 0;
+    this.timer = 99;
+    this.timerCounter = 0;
+    this.countdownValue = 3;
+    this.lastTime = 0;
+
+    // 輸入
+    this.keys = {};
+    this.prevKeys = {};
+    this.setupInput();
+
+    // 音效
+    this.sound = new Sound();
+
+    // 遊戲物件
+    this.fighter1 = null;
+    this.fighter2 = null;
+    this.projectiles = [];
+    this.particles = [];
+    this.winner = null;
+    this.bigText = '';
+    this.bigTextTimer = 0;
+
+    this.initFighters();
+  }
+
+  resizeCanvas() {
+    const maxW = Math.min(window.innerWidth - 20, 960);
+    const maxH = Math.min(window.innerHeight - 60, 540);
+    const ratio = 960 / 540;
+
+    if (maxW / maxH > ratio) {
+      this.canvas.height = maxH;
+      this.canvas.width = maxH * ratio;
+    } else {
+      this.canvas.width = maxW;
+      this.canvas.height = maxW / ratio;
+    }
+
+    this.W = this.canvas.width;
+    this.H = this.canvas.height;
+    this.groundY = this.H * 0.75;
+    this.scaleFactor = this.W / 960;
+  }
+
+  setupInput() {
+    window.addEventListener('keydown', (e) => {
+      this.keys[e.code] = true;
+      e.preventDefault();
+
+      if (this.state === 'start') {
+        this.sound.init();
+      }
+
+      if (this.state === 'start' && (e.code === 'Enter' || e.code === 'Space')) {
+        this.startCountdown();
+      }
+
+      if (this.state === 'ko' && e.code === 'Enter') {
+        this.restart();
+      }
+    });
+
+    window.addEventListener('keyup', (e) => {
+      this.keys[e.code] = false;
+      e.preventDefault();
+    });
+  }
+
+  // 邊緣檢測：獲取當前幀剛按下的鍵
+  getJustPressed() {
+    const jp = {};
+    for (const key in this.keys) {
+      if (this.keys[key] && !this.prevKeys[key]) {
+        jp[key] = true;
+      }
+    }
+    this.prevKeys = { ...this.keys };
+    return jp;
+  }
+
+  initFighters() {
+    const groundY = this.groundY;
+
+    // Player 1 - Ryu 隆
+    this.fighter1 = new Fighter({
+      name: 'Ryu',
+      x: 250, y: groundY, groundY: groundY, facing: 1,
+      moveSpeed: 3.5, jumpForce: -13, gravity: 0.6, maxHealth: 100,
+      colorScheme: {
+        skin: '#ffcc99', gi: '#ffffff', giBorder: '#cccccc',
+        accent: '#ff0000', hair: '#222222', pants: '#ffffff',
+        belt: '#cc0000', shoes: '#333333', headband: '#ff0000',
+        projectileColor: '#3388ff'
+      },
+      attacks: {
+        lightPunch: {
+          startup: 4, active: 3, recovery: 8,
+          damage: 6, knockback: 3,
+          hitbox: { type: 'punch', w: 20, h: 10 }
+        },
+        heavyKick: {
+          startup: 10, active: 5, recovery: 14,
+          damage: 14, knockback: 8, knockup: 0,
+          hitbox: { type: 'kick', w: 35, h: 12 }
+        },
+        projectile: {
+          startup: 6, active: 5, recovery: 12,
+          damage: 12, knockback: 5,
+          speed: 7,
+          hitbox: { type: 'projectile' }
+        },
+        antiAir: {
+          startup: 4, active: 8, recovery: 16,
+          damage: 20, knockback: 4, knockup: 10,
+          hitbox: { type: 'anti_air' }
+        }
+      }
+    });
+
+    // Player 2 - Ken 肯
+    this.fighter2 = new Fighter({
+      name: 'Ken',
+      x: 700, y: groundY, groundY: groundY, facing: -1,
+      moveSpeed: 3.5, jumpForce: -12.5, gravity: 0.6, maxHealth: 100,
+      colorScheme: {
+        skin: '#ffcc99', gi: '#ffffff', giBorder: '#cccccc',
+        accent: '#ffaa00', hair: '#ddaa22', pants: '#ffffff',
+        belt: '#000000', shoes: '#222222', headband: '#ddaa22',
+        projectileColor: '#ff6600'
+      },
+      attacks: {
+        lightPunch: {
+          startup: 4, active: 3, recovery: 8,
+          damage: 6, knockback: 3,
+          hitbox: { type: 'punch', w: 20, h: 10 }
+        },
+        heavyKick: {
+          startup: 9, active: 5, recovery: 14,
+          damage: 14, knockback: 7, knockup: 0,
+          hitbox: { type: 'kick', w: 38, h: 12 },
+          type: 'tornado'
+        },
+        projectile: {
+          startup: 6, active: 5, recovery: 12,
+          damage: 12, knockback: 5,
+          speed: 7,
+          hitbox: { type: 'projectile' }
+        },
+        antiAir: {
+          startup: 5, active: 7, recovery: 18,
+          damage: 16, knockback: 3, knockup: 8,
+          hitbox: { type: 'tornado' }
+        }
+      }
+    });
+  }
+
+  startCountdown() {
+    this.state = 'countdown';
+    this.stateTimer = 0;
+    this.countdownValue = 3;
+    this.bigText = 'ROUND 1';
+    this.bigTextTimer = 60;
+
+    this.fighter1.x = 250;
+    this.fighter2.x = 700;
+    this.fighter1.health = 100;
+    this.fighter2.health = 100;
+    this.fighter1.state = 'idle';
+    this.fighter2.state = 'idle';
+    this.fighter1.grounded = true;
+    this.fighter2.grounded = true;
+    this.fighter1.vy = 0;
+    this.fighter2.vy = 0;
+    this.fighter1.vx = 0;
+    this.fighter2.vx = 0;
+    this.fighter1.attackHit = false;
+    this.fighter2.attackHit = false;
+    this.fighter1.hasProjectile = false;
+    this.fighter2.hasProjectile = false;
+    this.timer = 99;
+    this.timerCounter = 0;
+    this.projectiles = [];
+    this.particles = [];
+    this.winner = null;
+
+    this.sound.play('bell');
+  }
+
+  restart() {
+    this.initFighters();
+    this.startCountdown();
+  }
+
+  updateFacing() {
+    if (this.fighter1.state !== 'hit' && this.fighter1.state !== 'knockdown') {
+      this.fighter1.facing = this.fighter1.x < this.fighter2.x ? 1 : -1;
+    }
+    if (this.fighter2.state !== 'hit' && this.fighter2.state !== 'knockdown') {
+      this.fighter2.facing = this.fighter2.x < this.fighter1.x ? 1 : -1;
+    }
+  }
+
+  handleInput(jp) {
+    // P1 輸入
+    if (this.fighter1.state !== 'hit' && this.fighter1.state !== 'knockdown' && this.fighter1.state !== 'getup') {
+      if (!this.fighter1.isAttackState() || this.fighter1.state === 'attack_projectile') {
+        let moveDir = 0;
+        if (this.keys['KeyA']) moveDir = -1;
+        if (this.keys['KeyD']) moveDir = 1;
+        this.fighter1.move(moveDir);
+      }
+
+      if (jp['KeyW']) this.fighter1.jump();
+
+      if (jp['KeyF']) { this.fighter1.punch('light'); this.sound.play('punch'); }
+      if (jp['KeyG']) { this.fighter1.punch('heavy'); this.sound.play('kick'); }
+      if (jp['KeyH']) { this.fighter1.punch('projectile'); this.sound.play('projectile'); }
+      if (jp['KeyJ']) { this.fighter1.punch('anti_air'); this.sound.play('punch'); }
+    }
+
+    // P2 輸入
+    if (this.fighter2.state !== 'hit' && this.fighter2.state !== 'knockdown' && this.fighter2.state !== 'getup') {
+      if (!this.fighter2.isAttackState() || this.fighter2.state === 'attack_projectile') {
+        let moveDir = 0;
+        if (this.keys['ArrowLeft']) moveDir = -1;
+        if (this.keys['ArrowRight']) moveDir = 1;
+        this.fighter2.move(moveDir);
+      }
+
+      if (jp['ArrowUp']) this.fighter2.jump();
+
+      if (jp['Numpad1'] || jp['Digit1']) { this.fighter2.punch('light'); this.sound.play('punch'); }
+      if (jp['Numpad2'] || jp['Digit2']) { this.fighter2.punch('heavy'); this.sound.play('kick'); }
+      if (jp['Numpad3'] || jp['Digit3']) { this.fighter2.punch('projectile'); this.sound.play('projectile'); }
+      if (jp['Numpad4'] || jp['Digit4']) { this.fighter2.punch('anti_air'); this.sound.play('punch'); }
+    }
+  }
+
+  aabbCollision(rect1, rect2) {
+    return rect1.x < rect2.x + rect2.w &&
+           rect1.x + rect1.w > rect2.x &&
+           rect1.y < rect2.y + rect2.h &&
+           rect1.y + rect1.h > rect2.y;
+  }
+
+  checkCollisions() {
+    const f1 = this.fighter1;
+    const f2 = this.fighter2;
+
+    // 角色間碰撞（推開）
+    const f1Hurt = f1.getHurtbox();
+    const f2Hurt = f2.getHurtbox();
+
+    if (this.aabbCollision(f1Hurt, f2Hurt)) {
+      const overlap = Math.min(f1Hurt.x + f1Hurt.w - f2Hurt.x, f2Hurt.x + f2Hurt.w - f1Hurt.x);
+      if (f1.x < f2.x) {
+        f1.x -= overlap * 0.3;
+        f2.x += overlap * 0.3;
+      } else {
+        f1.x += overlap * 0.3;
+        f2.x -= overlap * 0.3;
+      }
+    }
+
+    // 檢查 P1 攻擊命中 P2
+    if (f1.isAttackState()) {
+      const f1Hitbox = f1.getHitbox();
+      if (f1Hitbox && !f1.attackHit && f2.canTakeHit()) {
+        const f2Hurtbox = f2.getHurtbox();
+        if (this.aabbCollision(f1Hitbox, f2Hurtbox)) {
+          const result = f2.takeHit(f1Hitbox.damage, f1Hitbox.knockback || 0, f1Hitbox.knockup || 0, f1Hitbox, f1);
+          f1.attackHit = true;
+          this.spawnHitParticles(f2Hurtbox.x + f2Hurtbox.w / 2, f2Hurtbox.y + f2Hurtbox.h / 2, f1.colorScheme);
+
+          if (result === 'blocked') {
+            this.sound.play('block');
+          } else {
+            this.sound.play(f1.state === 'attack_heavy' ? 'kick' : 'punch');
+          }
+        }
+      }
+    }
+
+    // 檢查 P2 攻擊命中 P1
+    if (f2.isAttackState()) {
+      const f2Hitbox = f2.getHitbox();
+      if (f2Hitbox && !f2.attackHit && f1.canTakeHit()) {
+        const f1Hurtbox = f1.getHurtbox();
+        if (this.aabbCollision(f2Hitbox, f1Hurtbox)) {
+          const result = f1.takeHit(f2Hitbox.damage, f2Hitbox.knockback || 0, f2Hitbox.knockup || 0, f2Hitbox, f2);
+          f2.attackHit = true;
+          this.spawnHitParticles(f1Hurtbox.x + f1Hurtbox.w / 2, f1Hurtbox.y + f1Hurtbox.h / 2, f2.colorScheme);
+
+          if (result === 'blocked') {
+            this.sound.play('block');
+          } else {
+            this.sound.play(f2.state === 'attack_heavy' ? 'kick' : 'punch');
+          }
+        }
+      }
+    }
+
+    // 檢查投影體碰撞
+    for (let i = this.projectiles.length - 1; i >= 0; i--) {
+      const proj = this.projectiles[i];
+      if (!proj.active) continue;
+
+      const target = proj.owner === f1 ? f2 : f1;
+      if (target.canTakeHit()) {
+        const projHitbox = proj.getHitbox();
+        const targetHurtbox = target.getHurtbox();
+        if (this.aabbCollision(projHitbox, targetHurtbox)) {
+          const result = target.takeHit(proj.damage, 3, 2, projHitbox, proj.owner);
+          if (result !== 'blocked') {
+            proj.active = false;
+            proj.owner.hasProjectile = false;
+          }
+          this.spawnHitParticles(proj.x, proj.y, proj.owner.colorScheme);
+          this.sound.play(result === 'blocked' ? 'block' : 'projectile');
+        }
+      }
+    }
+  }
+
+  spawnHitParticles(x, y, colorScheme) {
+    const colors = ['#ffff00', '#ff8800', '#ffffff', colorScheme ? colorScheme.accent : '#ff0000'];
+    for (let i = 0; i < 8; i++) {
+      this.particles.push(new Particle({
+        x: x, y: y,
+        vx: (Math.random() - 0.5) * 10,
+        vy: (Math.random() - 0.5) * 10 - 3,
+        life: 15 + Math.random() * 15,
+        size: 3 + Math.random() * 4,
+        color: colors[Math.floor(Math.random() * colors.length)]
+      }));
+    }
+  }
+
+  drawBackground() {
+    const ctx = this.ctx;
+    const W = this.W;
+    const H = this.H;
+    const s = this.scaleFactor;
+
+    // 天空漸層
+    const skyGrad = ctx.createLinearGradient(0, 0, 0, H * 0.6);
+    skyGrad.addColorStop(0, '#1a0a2e');
+    skyGrad.addColorStop(0.5, '#2d1b4e');
+    skyGrad.addColorStop(1, '#4a2070');
+    ctx.fillStyle = skyGrad;
+    ctx.fillRect(0, 0, W, H);
+
+    // 月亮
+    ctx.fillStyle = 'rgba(255, 255, 200, 0.8)';
+    ctx.beginPath();
+    ctx.arc(W * 0.8, H * 0.12, 30 * s, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255, 255, 200, 0.1)';
+    ctx.beginPath();
+    ctx.arc(W * 0.8, H * 0.12, 50 * s, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 遠處建築群剪影
+    ctx.fillStyle = '#0d0820';
+    this._drawCityscape(ctx, W, H, s);
+
+    // 中間建築群
+    ctx.fillStyle = '#150e30';
+    ctx.fillRect(30 * s, this.groundY - 100 * s, 60 * s, 100 * s);
+    ctx.fillRect(90 * s, this.groundY - 130 * s, 50 * s, 130 * s);
+    ctx.fillRect(W - 140 * s, this.groundY - 110 * s, 70 * s, 110 * s);
+    ctx.fillRect(W - 60 * s, this.groundY - 140 * s, 40 * s, 140 * s);
+
+    // 地面
+    const groundGrad = ctx.createLinearGradient(0, this.groundY, 0, H);
+    groundGrad.addColorStop(0, '#3d2b1f');
+    groundGrad.addColorStop(0.3, '#2a1a10');
+    groundGrad.addColorStop(1, '#1a0f08');
+    ctx.fillStyle = groundGrad;
+    ctx.fillRect(0, this.groundY, W, H - this.groundY);
+
+    // 地面線條
+    ctx.strokeStyle = '#5a4030';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, this.groundY);
+    ctx.lineTo(W, this.groundY);
+    ctx.stroke();
+
+    for (let i = 0; i < W; i += 40 * s) {
+      ctx.fillStyle = '#4a3525';
+      ctx.fillRect(i, this.groundY, 30 * s, 2);
+    }
+  }
+
+  _drawCityscape(ctx, W, H, s) {
+    const buildings = [
+      { x: 0, w: 80 * s, h: 150 }, { x: 70 * s, w: 60 * s, h: 200 },
+      { x: 120 * s, w: 90 * s, h: 120 }, { x: 200 * s, w: 70 * s, h: 180 },
+      { x: 260 * s, w: 50 * s, h: 220 }, { x: 300 * s, w: 100 * s, h: 140 },
+      { x: 390 * s, w: 60 * s, h: 190 }, { x: 440 * s, w: 80 * s, h: 160 },
+      { x: 510 * s, w: 70 * s, h: 210 }, { x: 570 * s, w: 90 * s, h: 130 },
+      { x: 650 * s, w: 60 * s, h: 180 }, { x: 700 * s, w: 100 * s, h: 150 },
+      { x: 790 * s, w: 80 * s, h: 200 }, { x: 860 * s, w: 100 * s, h: 170 }
+    ];
+
+    buildings.forEach(b => {
+      ctx.fillRect(b.x, this.groundY - b.h * s, b.w, b.h * s);
+      ctx.fillStyle = 'rgba(255, 200, 50, 0.3)';
+      for (let wy = this.groundY - b.h * s + 10 * s; wy < this.groundY - 10 * s; wy += 20 * s) {
+        for (let wx = b.x + 8 * s; wx < b.x + b.w - 8 * s; wx += 15 * s) {
+          if (Math.random() > 0.3) {
+            ctx.fillRect(wx, wy, 6 * s, 8 * s);
+          }
+        }
+      }
+      ctx.fillStyle = '#0d0820';
+    });
+  }
+
+  drawUI() {
+    const ctx = this.ctx;
+    const W = this.W;
+    const H = this.H;
+    const s = this.scaleFactor;
+
+    const barWidth = W * 0.35;
+    const barHeight = 22 * s;
+    const barY = 20 * s;
+
+    // P1 血條背景
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(20 * s, barY - 2, barWidth + 4, barHeight + 4);
+    ctx.fillStyle = '#330000';
+    ctx.fillRect(22 * s, barY, barWidth, barHeight);
+
+    const p1Pct = this.fighter1.health / this.fighter1.maxHealth;
+    const p1BarW = barWidth * p1Pct;
+    let p1Color = this.getHealthColor(p1Pct);
+    ctx.fillStyle = p1Color;
+    ctx.fillRect(22 * s + barWidth - p1BarW, barY, p1BarW, barHeight);
+
+    // P2 血條背景
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(W - barWidth - 20 * s, barY - 2, barWidth + 4, barHeight + 4);
+    ctx.fillStyle = '#330000';
+    ctx.fillRect(W - barWidth - 22 * s, barY, barWidth, barHeight);
+
+    const p2Pct = this.fighter2.health / this.fighter2.maxHealth;
+    const p2BarW = barWidth * p2Pct;
+    let p2Color = this.getHealthColor(p2Pct);
+    ctx.fillStyle = p2Color;
+    ctx.fillRect(W - barWidth - 22 * s, barY, p2BarW, barHeight);
+
+    // 血條邊框
+    ctx.strokeStyle = '#ffcc00';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(22 * s, barY, barWidth, barHeight);
+    ctx.strokeRect(W - barWidth - 22 * s, barY, barWidth, barHeight);
+
+    // 角色名稱
+    ctx.font = `${16 * s}px "Courier New", monospace`;
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'left';
+    ctx.fillText(this.fighter1.name, 25 * s, barY + barHeight + 16 * s);
+
+    ctx.textAlign = 'right';
+    ctx.fillText(this.fighter2.name, W - 25 * s, barY + barHeight + 16 * s);
+
+    // 計時器
+    ctx.textAlign = 'center';
+    ctx.font = `bold ${28 * s}px "Courier New", monospace`;
+    ctx.fillStyle = this.timer <= 10 ? '#ff4444' : '#ffcc00';
+    ctx.fillText(Math.ceil(this.timer).toString(), W / 2, barY + barHeight - 2 * s);
+
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(W / 2 - 25 * s, barY - 2, 50 * s, 32 * s);
+    ctx.strokeStyle = '#ffcc00';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(W / 2 - 25 * s, barY - 2, 50 * s, 32 * s);
+  }
+
+  getHealthColor(pct) {
+    if (pct > 0.5) return '#00cc44';
+    if (pct > 0.25) return '#cccc00';
+    return '#cc0000';
+  }
+
+  drawBigText() {
+    if (this.bigTextTimer <= 0) return;
+
+    const ctx = this.ctx;
+    const W = this.W;
+    const H = this.H;
+    const s = this.scaleFactor;
+
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    let fontSize = 64 * s;
+    if (this.bigTextTimer > 40) {
+      ctx.globalAlpha = (60 - this.bigTextTimer) / 20;
+      fontSize += (1 - (60 - this.bigTextTimer) / 20) * 30;
+    } else if (this.bigTextTimer < 15) {
+      ctx.globalAlpha = this.bigTextTimer / 15;
+      fontSize += (1 - this.bigTextTimer / 15) * 20;
+    }
+
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+    ctx.font = `bold ${fontSize}px "Courier New", monospace`;
+    ctx.fillText(this.bigText, W / 2 + 3, H / 2 + 3);
+
+    if (this.bigText === 'K.O.') ctx.fillStyle = '#ff0000';
+    else if (this.bigText === 'FIGHT!') ctx.fillStyle = '#ffcc00';
+    else ctx.fillStyle = '#ffffff';
+    ctx.fillText(this.bigText, W / 2, H / 2);
+    ctx.restore();
+
+    this.bigTextTimer--;
+  }
+
+  drawStartScreen() {
+    const ctx = this.ctx;
+    const W = this.W;
+    const H = this.H;
+    const s = this.scaleFactor;
+
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    ctx.fillStyle = '#ff4444';
+    ctx.font = `bold ${48 * s}px "Courier New", monospace`;
+    ctx.fillText('STREET FIGHTER', W / 2, H * 0.15);
+
+    ctx.fillStyle = '#ffcc00';
+    ctx.font = `bold ${36 * s}px "Courier New", monospace`;
+    ctx.fillText('格 闘 遊 戲', W / 2, H * 0.22);
+
+    // P1 資訊
+    ctx.font = `bold ${20 * s}px "Courier New", monospace`;
+    ctx.fillStyle = '#ff6666';
+    ctx.textAlign = 'left';
+    ctx.fillText('P1 - Ryu / 隆', W * 0.2, H * 0.38);
+    ctx.fillStyle = '#aaaaaa';
+    ctx.font = `${14 * s}px "Courier New", monospace`;
+    const p1Controls = [
+      'W: Jump    A: Left   D: Right',
+      'S: Crouch/Block',
+      'F: Light Punch',
+      'G: Heavy Kick',
+      'H: Hadoken   J: Shoryuken'
+    ];
+    p1Controls.forEach((line, i) => {
+      ctx.fillText(line, W * 0.2, H * 0.44 + i * 20 * s);
+    });
+
+    // P2 資訊
+    ctx.font = `bold ${20 * s}px "Courier New", monospace`;
+    ctx.fillStyle = '#ffaa44';
+    ctx.textAlign = 'right';
+    ctx.fillText('P2 - Ken / 肯', W * 0.8, H * 0.38);
+    ctx.fillStyle = '#aaaaaa';
+    ctx.font = `${14 * s}px "Courier New", monospace`;
+    const p2Controls = [
+      'Arrow Keys: Move/Jump/Crouch',
+      'Numpad 1: Light Punch',
+      'Numpad 2: Heavy Kick',
+      'Numpad 3: Fireball',
+      'Numpad 4: Tornado Kick (Uppercut)'
+    ];
+    p2Controls.forEach((line, i) => {
+      ctx.fillText(line, W * 0.8, H * 0.44 + i * 20 * s);
+    });
+
+    const blink = Math.sin(Date.now() * 0.005) > 0;
+    if (blink) {
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#ffffff';
+      ctx.font = `bold ${18 * s}px "Courier New", monospace`;
+      ctx.fillText('Press ENTER or SPACE to START', W / 2, H * 0.75);
+    }
+
+    ctx.fillStyle = '#666666';
+    ctx.font = `${12 * s}px "Courier New", monospace`;
+    ctx.fillText('Blocking: Hold away direction or Down to reduce damage by 80%', W / 2, H * 0.85);
+  }
+
+  drawKOScreen() {
+    const ctx = this.ctx;
+    const W = this.W;
+    const H = this.H;
+    const s = this.scaleFactor;
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    const scale = 1.5;
+    ctx.save();
+    ctx.translate(W / 2, H * 0.4);
+    ctx.scale(scale, scale);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `bold ${80 * s}px "Courier New", monospace`;
+    ctx.fillText('K.O.', 0, 0);
+    ctx.restore();
+
+    if (this.winner) {
+      ctx.fillStyle = '#ffcc00';
+      ctx.font = `bold ${24 * s}px "Courier New", monospace`;
+      ctx.fillText(this.winner + ' WINS!', W / 2, H * 0.52);
+    }
+
+    const blink = Math.sin(Date.now() * 0.005) > 0;
+    if (blink) {
+      ctx.fillStyle = '#ffffff';
+      ctx.font = `${16 * s}px "Courier New", monospace`;
+      ctx.fillText('Press ENTER to restart', W / 2, H * 0.65);
+    }
+  }
+
+  update() {
+    if (this.state === 'start') return;
+
+    if (this.state === 'countdown') {
+      this.stateTimer++;
+
+      if (this.bigTextTimer > 0) return;
+
+      if (this.countdownValue > 0) {
+        if (this.stateTimer === 1) {
+          this.bigText = this.countdownValue.toString();
+          this.bigTextTimer = 45;
+          this.sound.play('bell');
+        }
+      } else {
+        this.bigText = 'FIGHT!';
+        this.bigTextTimer = 35;
+        this.sound.play('bell');
+        this.state = 'playing';
+      }
+    }
+
+    if (this.state !== 'playing') return;
+
+    this.timerCounter++;
+    if (this.timerCounter >= 60) {
+      this.timerCounter = 0;
+      this.timer--;
+      if (this.timer <= 0) {
+        this.timer = 0;
+        this.endRound();
+        return;
+      }
+    }
+
+    const jp = this.getJustPressed();
+    this.updateFacing();
+    this.handleInput(jp);
+
+    this.fighter1.update();
+    this.fighter2.update();
+
+    this.checkCollisions();
+
+    for (let i = this.projectiles.length - 1; i >= 0; i--) {
+      this.projectiles[i].update();
+      if (!this.projectiles[i].active) {
+        this.projectiles.splice(i, 1);
+      }
+    }
+
+    for (let i = this.particles.length - 1; i >= 0; i--) {
+      this.particles[i].update();
+      if (this.particles[i].isDead()) {
+        this.particles.splice(i, 1);
+      }
+    }
+
+    if (this.fighter1.health <= 0 || this.fighter2.health <= 0) {
+      this.endRound();
+    }
+  }
+
+  endRound() {
+    this.state = 'ko';
+    this.sound.play('ko');
+
+    if (this.fighter1.health <= 0) {
+      this.winner = this.fighter2.name;
+    } else if (this.fighter2.health <= 0) {
+      this.winner = this.fighter1.name;
+    } else {
+      this.winner = this.fighter1.health > this.fighter2.health ? this.fighter1.name :
+                    this.fighter2.health > this.fighter1.health ? this.fighter2.name : 'DRAW';
+    }
+
+    this.bigText = 'K.O.';
+    this.bigTextTimer = 9999;
+  }
+
+  render() {
+    const ctx = this.ctx;
+    ctx.clearRect(0, 0, this.W, this.H);
+
+    this.drawBackground();
+
+    if (this.state === 'start') {
+      this.drawStartScreen();
+      return;
+    }
+
+    this.projectiles.forEach(p => p.draw(ctx, 0, 0));
+    this.particles.forEach(p => p.draw(ctx, 0, 0));
+    this.fighter1.draw(ctx, 0, 0);
+    this.fighter2.draw(ctx, 0, 0);
+    this.drawUI();
+    this.drawBigText();
+
+    if (this.state === 'ko') {
+      this.drawKOScreen();
+    }
+  }
+
+  gameLoop(timestamp) {
+    if (this.lastTime === 0) this.lastTime = timestamp;
+    this.lastTime = timestamp;
+
+    this.update();
+    this.render();
+
+    requestAnimationFrame((t) => this.gameLoop(t));
+  }
+
+  start() {
+    requestAnimationFrame((t) => this.gameLoop(t));
+  }
+}
+
+// ============================================================
+// 啟動遊戲
+// ============================================================
+window.addEventListener('DOMContentLoaded', () => {
+  const game = new Game();
+  game.start();
+});
+</script>
+</body>
+</html>
