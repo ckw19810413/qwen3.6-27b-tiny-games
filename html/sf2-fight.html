@@ -368,13 +368,18 @@ class Fighter extends Sprite {
     // 蹲下格擋判斷
     if (this.grounded && !this.isAttackState() && this.state !== 'hit' && this.state !== 'knockdown' && this.state !== 'getup') {
       const isP1 = this.name === 'Ryu';
+      const isP2 = this.name === 'Ken';
       const isCrouching = isP1 ? game.keys['KeyS'] : game.keys['ArrowDown'];
       if (isCrouching) {
+        if (this.state !== 'crouch') this.state = 'crouch';
         this.blocking = true;
+      } else if (this.state === 'crouch') {
+        this.state = 'idle';
       } else {
         this.blocking = false;
       }
     } else if (!this.grounded) {
+      if (this.state === 'crouch') this.state = 'idle';
       this.blocking = false;
     }
   }
@@ -1521,23 +1526,23 @@ class Game {
   update() {
     if (this.state === 'start') return;
 
+    // Countdown phase: ROUND 1 → 3 → 2 → 1 → FIGHT! → playing
     if (this.state === 'countdown') {
       this.stateTimer++;
-
-      if (this.bigTextTimer > 0) return;
+      if (this.bigTextTimer > 0) return; // Wait for big text animation to finish
 
       if (this.countdownValue > 0) {
-        if (this.stateTimer === 1) {
-          this.bigText = this.countdownValue.toString();
-          this.bigTextTimer = 45;
-          this.sound.play('bell');
-        }
+        this.bigText = this.countdownValue.toString();
+        this.bigTextTimer = 45;
+        this.sound.play('bell');
+        this.countdownValue--;
       } else {
         this.bigText = 'FIGHT!';
         this.bigTextTimer = 35;
         this.sound.play('bell');
         this.state = 'playing';
       }
+      return;
     }
 
     if (this.state !== 'playing') return;
