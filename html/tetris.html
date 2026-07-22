@@ -52,6 +52,27 @@
       padding: 3px;
       box-shadow: 0 0 30px rgba(96,165,250,0.08);
     }
+    .pause-btn {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      z-index: 20;
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      border: 1px solid #333;
+      background: rgba(17,17,17,0.85);
+      color: #ccc;
+      font-size: 1.2rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .pause-btn:hover { background: rgba(96,165,250,0.2); }
+    .pause-btn:active { background: rgba(96,165,250,0.35); }
     canvas#board {
       display: block;
       width: 300px;
@@ -176,6 +197,45 @@
       text-decoration: none;
     }
     .footer a:hover { text-decoration: underline; }
+    /* Mobile stats bar */
+    .mobile-stats {
+      display: none;
+      gap: 6px;
+      width: 100%;
+      max-width: 340px;
+    }
+    .mobile-stat-chip {
+      background: #111;
+      border: 1px solid #2a2a2a;
+      border-radius: 6px;
+      padding: 4px 8px;
+      text-align: center;
+      flex: 1;
+    }
+    .mobile-stat-chip .label {
+      font-size: 0.6rem;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .mobile-stat-chip .val {
+      font-size: 1rem;
+      font-weight: 700;
+      color: #60a5fa;
+    }
+    .mobile-stat-chip.next-chip {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 4px;
+    }
+    canvas#next-mobile {
+      display: block;
+      width: 40px;
+      height: 40px;
+    }
+
     .touch-controls {
       display: none;
       gap: 6px;
@@ -208,23 +268,39 @@
       gap: 6px;
     }
 
-    @media (pointer: coarse) {
-      .touch-controls { display: flex; flex-direction: column; align-items: center; }
+    @media (pointer: coarse) and (orientation: landscape) {
+      /* Landscape mobile — keep side panel visible */
+      .touch-controls { display: none; }
     }
-    @media (max-width: 520px) {
+    @media (pointer: coarse) and (orientation: portrait) {
+      /* Portrait mobile — show mobile stats, hide side panel */
+      .touch-controls { display: flex; flex-direction: column; align-items: center; }
+      .mobile-stats { display: flex; }
+      .side-panel { display: none; }
+      .game-container { flex-direction: column; align-items: center; }
+    }
+    @media (max-width: 520px) and (orientation: landscape) {
       canvas#board { width: 240px; height: 480px; }
       .side-panel { min-width: 110px; }
       canvas#next { width: 80px; height: 80px; }
       .game-title { font-size: 1.1rem; }
       .panel-box .value { font-size: 1.1rem; }
     }
-    @media (max-width: 400px) {
+    @media (max-width: 520px) and (orientation: portrait) {
+      canvas#board { width: 240px; height: 480px; }
+      .game-title { font-size: 1.1rem; }
+    }
+    @media (max-width: 400px) and (orientation: landscape) {
       canvas#board { width: 200px; height: 400px; }
       .side-panel { min-width: 90px; }
       canvas#next { width: 70px; height: 70px; }
       .game-title { font-size: 1rem; }
       .panel-box { padding: 8px; }
       .panel-box .value { font-size: 1rem; }
+    }
+    @media (max-width: 400px) and (orientation: portrait) {
+      canvas#board { width: 200px; height: 400px; }
+      .game-title { font-size: 1rem; }
     }
   </style>
 </head>
@@ -233,6 +309,7 @@
     <div class="game-title">TETRIS</div>
     <div class="game-container">
       <div class="board-wrap">
+        <button class="pause-btn" id="pauseBtn" title="Pause">⏸</button>
         <canvas id="board" width="300" height="600"></canvas>
         <div class="status-overlay" id="overlay">
           <div class="status-text game-over-text" id="overlayTitle">GAME OVER</div>
@@ -268,6 +345,15 @@
         </div>
       </div>
     </div>
+    <!-- Mobile stats bar (portrait only) -->
+    <div class="mobile-stats" id="mobileStats">
+      <div class="mobile-stat-chip"><div class="label">Score</div><div class="val" id="score-mobile">0</div></div>
+      <div class="mobile-stat-chip"><div class="label">Level</div><div class="val" id="level-mobile">1</div></div>
+      <div class="mobile-stat-chip"><div class="label">Lines</div><div class="val" id="lines-mobile">0</div></div>
+      <div class="mobile-stat-chip"><div class="label">High</div><div class="val" id="highscore-mobile">0</div></div>
+      <div class="mobile-stat-chip next-chip"><canvas id="next-mobile" width="80" height="80"></canvas></div>
+    </div>
+
     <div class="touch-controls" id="touchControls">
       <div class="touch-row">
         <div class="touch-btn" data-action="left">◀</div>
@@ -305,10 +391,17 @@
       const highScoreEl = document.getElementById('highScoreDisplay');
       const levelEl = document.getElementById('levelDisplay');
       const linesEl = document.getElementById('linesDisplay');
+      const scoreElMobile = document.getElementById('score-mobile');
+      const levelElMobile = document.getElementById('level-mobile');
+      const linesElMobile = document.getElementById('lines-mobile');
+      const highScoreElMobile = document.getElementById('highscore-mobile');
       const overlay = document.getElementById('overlay');
       const overlayTitle = document.getElementById('overlayTitle');
       const overlaySub = document.getElementById('overlaySub');
       const overlayBtn = document.getElementById('overlayBtn');
+      const pauseBtn = document.getElementById('pauseBtn');
+      const nextMobileCanvas = document.getElementById('next-mobile');
+      const nextMobileCtx = nextMobileCanvas ? nextMobileCanvas.getContext('2d') : null;
 
       // -------- Tetrominoes --------
       const SHAPES = {
@@ -588,18 +681,38 @@
             drawBlock(nextCtx, offsetX + c * NEXT_SIZE, offsetY + r * NEXT_SIZE, nextPiece.color, NEXT_SIZE);
           }
         }
+        /* Draw mobile next piece */
+        if (nextMobileCtx && nextMobileCanvas) {
+          nextMobileCtx.clearRect(0, 0, nextMobileCanvas.width, nextMobileCanvas.height);
+          const mobSize = 18;
+          const mobOffX = (nextMobileCanvas.width - cols * mobSize) / 2;
+          const mobOffY = (nextMobileCanvas.height - rows * mobSize) / 2;
+          for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+              if (!b[r][c]) continue;
+              drawBlock(nextMobileCtx, mobOffX + c * mobSize, mobOffY + r * mobSize, nextPiece.color, mobSize);
+            }
+          }
+        }
       }
 
       // -------- UI updates --------
       function updateUI() {
-        scoreEl.textContent = score.toLocaleString();
+        const scoreStr = score.toLocaleString();
+        const highScoreStr = highScore.toLocaleString();
+        scoreEl.textContent = scoreStr;
         levelEl.textContent = level;
         linesEl.textContent = lines;
         if (score > highScore) {
           highScore = score;
           localStorage.setItem('tetrisHighScore', String(highScore));
         }
-        highScoreEl.textContent = highScore.toLocaleString();
+        highScoreEl.textContent = highScoreStr;
+        /* Mobile mirror */
+        if (scoreElMobile) scoreElMobile.textContent = scoreStr;
+        if (levelElMobile) levelElMobile.textContent = level;
+        if (linesElMobile) linesElMobile.textContent = lines;
+        if (highScoreElMobile) highScoreElMobile.textContent = highScoreStr;
       }
 
       function handleGameOver() {
@@ -670,8 +783,10 @@
           overlaySub.textContent = 'Press P to resume';
           overlayBtn.textContent = 'RESUME';
           overlay.classList.add('active');
+          if (pauseBtn) pauseBtn.textContent = '▶';
         } else {
           overlay.classList.remove('active');
+          if (pauseBtn) pauseBtn.textContent = '⏸';
           startDropTimer();
         }
       }
@@ -764,6 +879,12 @@
         } else {
           startGame();
         }
+      });
+
+      /* Pause button */
+      pauseBtn.addEventListener('click', () => {
+        if (!gameStarted || gameOver) return;
+        togglePause();
       });
 
       // -------- Initial draw --------
